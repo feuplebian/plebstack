@@ -1,0 +1,39 @@
+*~
+\#*\#
+
+__pycache__
+
+build
+[_.]build
+*.egg-info
+
+.*[cC]ache*
+
+.mypy*
+.pytest*
+
+.coverage
+htmlcov
+
+# binary
+*.png
+*.pdf
+
+.vscode*
+
+# cache/dump
+*.json
+*.yaml
+*.txt
+*.log
+
+# reports
+*.html
+*.js
+*.css
+
+.coverage
+.hypothesis
+
+tmp
+data
