@@ -1,8 +1,10 @@
-from typing import cast
+from typing import TypeAlias, cast
 
 from glom import glom, Iter, T
 
 from plebstack.models import Response
+
+recs_t: TypeAlias = list[dict]
 
 
 def expect_nonempty(messages: list):
@@ -39,9 +41,7 @@ def records_jl(
     return cast(list[dict], res)
 
 
-def records(
-    messages: list[str], response_t: type[Response], columns: dict[str, str]
-) -> list[dict]:
+def records(messages: list[str], response_t: type[Response], columns: dict[str, str]):
     """Parse a list of JSON responses into a list of records
 
     Parameters
@@ -63,7 +63,7 @@ def records(
         messages,
         Iter(response_t.select).filter(T).map(T.as_records(columns)).flatten().all(),
     )
-    return cast(list[dict], res)
+    return res
 
 
 def objects(messages: list[str], response_t: type[Response]) -> list[Response]:

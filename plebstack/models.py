@@ -1,24 +1,42 @@
+from dataclasses import fields
 from datetime import datetime
-from enum import StrEnum, auto
+from enum import IntEnum, StrEnum, auto
 import json
+from types import new_class
 from typing import cast, Literal, Self
 from warnings import warn
 
 from glom import glom, Iter
 from glom import Literal as Lit
-from pydantic import BaseModel, Field, PositiveFloat, PositiveInt, ValidationError
+from pydantic import (
+    BaseModel,
+    conint,
+    Field,
+    PositiveFloat,
+    PositiveInt,
+    RootModel,
+    ValidationError,
+)
+from pydantic.dataclasses import dataclass
 from rich import print as pprint
 
 tickers = ["BTC/EUR"]
 
 
-class MsgMethods(StrEnum):
+class MyStrEnum(StrEnum):
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(value={self.name!r})"
+
+
+class MsgMethods(MyStrEnum):
     ping = auto()
     subscribe = auto()
     unsubscribe = auto()
 
 
-class Channels(StrEnum):
+class Channels(MyStrEnum):
+    """Channels we may subscribe to."""
+
     book = auto()
     executions = auto()
     heartbeat = auto()
@@ -29,9 +47,28 @@ class Channels(StrEnum):
     status = auto()
 
 
+class MyIntEnum(IntEnum):
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(value={self.value})"
+
+
+class Intervals(MyIntEnum):
+    """Intervals in minutes."""
+
+    min_01 = 1
+    min_05 = 5
+    min_15 = 15
+    min_30 = 30
+    hour_1 = 60
+    hour_4 = 240
+    day_01 = 1440
+    day_07 = 10080
+    day_15 = 21600
+
+
 class Msg(BaseModel):
     method: Literal[MsgMethods.ping, MsgMethods.subscribe, MsgMethods.unsubscribe]
-    req_id: PositiveInt
+    req_id: conint(ge=0)
 
 
 class Channel(BaseModel):
@@ -41,7 +78,7 @@ class Channel(BaseModel):
 
 class OHLCReq(Channel):
     channel: Channels = Channels.ohlc
-    interval: Literal[1, 5, 15, 30, 60, 240, 1440, 10080, 21600] = 1  # in minutes
+    interval: Intervals = Intervals.min_01
 
 
 class TickerReq(Channel):
@@ -56,7 +93,7 @@ class SubUnsub(Msg):
     params: OHLCReq | TickerReq | TradeReq
 
 
-class ResponseKind(StrEnum):
+class ResponseKind(MyStrEnum):
     snapshot = auto()
     update = auto()
 
@@ -98,18 +135,33 @@ class Response(Heartbeat):
             return
 
 
-class OHLCData(BaseModel):
-    # close: PositiveFloat
-    # high: PositiveFloat
-    # low: PositiveFloat
-    # open: PositiveFloat
+@dataclass
+class OHLCData:
+    close: PositiveFloat
+    high: PositiveFloat
+    low: PositiveFloat
+    open: PositiveFloat  # noqa: A003; can't help it, API uses this attribute
     symbol: Literal["BTC/EUR"]
     interval_begin: datetime
     trades: PositiveInt
     volume: PositiveFloat
     vwap: PositiveFloat
-    interval: Literal[1, 5, 15, 30, 60, 240, 1440, 10080, 21600]
+    interval: Intervals
     timestamp: datetime
+
+
+def model_dump_json(model) -> str:
+    return RootModel[type(model)](model).model_dump_json()
+
+
+def make_record_t(name: str, field_map: dict[str, str], annotations: dict[str, type]):
+    fields = {
+        "type": ResponseKind,
+        **{k: annotations[v] for k, v in field_map.items() if v in annotations},
+    }
+    namespace = {"__annotations__": fields, "model_dump_json": model_dump_json}
+    klass = new_class(name, (), {}, lambda ns: ns.update(namespace))
+    return dataclass(klass)
 
 
 class OHLCResponse(Response):
@@ -117,23 +169,25 @@ class OHLCResponse(Response):
     data: list[OHLCData]
     timestamp: datetime
 
-    def as_records(self, columns: dict[str, str]) -> list[dict]:
+    def as_records(self, columns: dict[str, str]):
         """Columns to include in a record: {"column_name": "<API attr>"}"""
         if len(self.data) == 0:
             return []
 
+        _known = glom(OHLCData, (fields, ["name"]))
         if unknown := {
-            col: columns.pop(col)
-            for col, attr in columns.items()
-            if attr not in type(self.data[0]).model_fields
+            col: columns.pop(col) for col, attr in columns.items() if attr not in _known
         }:
             warn(f"skipping unknown columns: {unknown}", stacklevel=2)
 
-        record_pattern = {
+        field_map = {
             "type": Lit(self.type),
             "interval": "interval",
             "begin": "interval_begin",
             **columns,
         }
-        res = glom(self.data, Iter().map(record_pattern).all())
-        return cast(list[dict], res)
+        rec_t = make_record_t("Record", field_map, OHLCData.__annotations__)
+        res: list[rec_t] = glom(
+            self.data, Iter().map(field_map).map(lambda i: rec_t(**i)).all()
+        )
+        return res
